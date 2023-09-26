@@ -626,12 +626,6 @@ class RobinModel(RobinPretrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
-    def get_input_embeddings(self):
-        return self.embed_in
-
-    def set_input_embeddings(self, value):
-        self.embed_in = value
-
     @add_start_docstrings_to_model_forward(GPT_NEOX_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
         checkpoint=_CHECKPOINT_FOR_DOC,
@@ -644,11 +638,10 @@ class RobinModel(RobinPretrainedModel):
         input_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        input_ids_img: Optional[torch.LongTensor] = None,
-        position_ids_img: Optional[torch.LongTensor] = None,
-        inputs_embeds_img: Optional[torch.FloatTensor] = None,
+        images: Optional[torch.FloatTensor] = None,
+        multimodal_position_ids: Optional[torch.LongTensor] = None,
+        head_mask: Optional[torch.FloatTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
@@ -671,7 +664,7 @@ class RobinModel(RobinPretrainedModel):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         use_cache = use_cache if use_cache is not None else self.config.use_cache
-
+        
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
         elif input_ids is not None:
@@ -681,18 +674,6 @@ class RobinModel(RobinPretrainedModel):
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
         
-        if input_ids_img is not None and inputs_embeds_img is not None:
-            raise ValueError("You cannot specify both input_ids_img and inputs_embeds_img at the same time")
-        elif input_ids_img is not None:
-            input_shape_img = input_ids.size()
-        elif inputs_embeds_img is not None:
-            input_shape_img = inputs_embeds.size()[:-1]
-        else:
-            raise ValueError("You have to specify either input_ids_img or inputs_embeds_img")
-
-        if input_shape != input_shape_img:
-            raise ValueError("You must have exactly one image per text prompt")
-
         batch_size, seq_length = input_shape
 
         if past_key_values is None:
@@ -707,13 +688,6 @@ class RobinModel(RobinPretrainedModel):
             position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
         else:
             position_ids = position_ids.view(-1, seq_length).long()
-
-        if position_ids_img is None:
-            device = input_ids_img.device if input_ids_img is not None else inputs_embeds_img.device
-            position_ids_img = torch.arange(past_length, seq_length + past_length, dtype=torch.long, device=device)
-            position_ids_img = position_ids.unsqueeze(0).view(-1, seq_length)
-        else:
-            position_ids_img = position_ids_img.view(-1, seq_length).long()
 
         # Attention mask.
         if attention_mask is not None:
@@ -743,11 +717,18 @@ class RobinModel(RobinPretrainedModel):
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_in(input_ids)
-
-        if inputs_embeds_img is None:
-            inputs_embeds_img = self.embed_in_img(input_ids_img)
         
-        ### TODO stoped here
+        # Add multimodal in beyond text embedding
+        if images is not None:
+            image_embeds = self.image_prefix(images)
+            
+            # By default put images first then words
+            if multimodal_position_ids is None:
+                inputs_embeds = torch.cat([image_embeds, inputs_embeds], dim=1)
+            else:
+                raise NotImplementedError
+        
+        # Normal forward   
         hidden_states = self.emb_dropout(inputs_embeds)
 
         if self.gradient_checkpointing and self.training:
@@ -840,6 +821,8 @@ class RobinForCausalLM(RobinPretrainedModel):
         attention_mask: Optional[torch.FloatTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
+        images: Optional[torch.FloatTensor] = None,
+        multimodal_position_ids: Optional[torch.FloatTensor] = None,
         head_mask: Optional[torch.FloatTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         labels: Optional[torch.LongTensor] = None,
@@ -895,6 +878,8 @@ class RobinForCausalLM(RobinPretrainedModel):
             position_ids=position_ids,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
+            images=images,
+            multimodal_position_ids=multimodal_position_ids,
             past_key_values=past_key_values,
             use_cache=use_cache,
             output_attentions=output_attentions,
