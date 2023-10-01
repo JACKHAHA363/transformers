@@ -424,7 +424,7 @@ class RobinLayer(nn.Module):
         use_cache: Optional[bool] = False,
         layer_past: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: Optional[bool] = False,
-    ):
+    ):  
         attention_layer_outputs = self.attention(
             self.input_layernorm(hidden_states),
             attention_mask=attention_mask,
@@ -551,33 +551,6 @@ class Adapter(nn.Module):
         return self.adapter(x) + x
 
 
-class ParallelAdapter(Adapter):
-    def __init__(
-        self,
-        module: nn.Module,
-        dim: int,
-        downsample_factor: int = 4,
-        scaled: bool = False,
-        add_layernorm: bool = False,
-        activation: nn.Module = nn.ReLU,
-    ):
-        super().__init__(
-            dim, downsample_factor, add_layernorm=add_layernorm, activation=activation
-        )
-        self.module = module
-
-        if scaled:
-            # init scaling param
-            self.adapter_scale = nn.Parameter(torch.ones(1))
-        else:
-            self.adapter_scale = 1
-
-    def forward(self, x: TensorType["b", "s", "d"], **module_kwargs):
-        y = self.module(x, **module_kwargs)
-        z = self.adapter(x)
-        return y + (z * self.adapter_scale)
-
-
 class AdapterWrapper(Adapter):
     # used to add an adapter to the attention block
 
@@ -593,14 +566,20 @@ class AdapterWrapper(Adapter):
         self.attn_block = attn_block
 
     def forward(self, x: TensorType["b", "s", "d"], *attn_args, **attn_kwargs):
-        attn_outputs = self.attn_block(x, *attn_args, **attn_kwargs)
-        
-        attn_output, outputs = (
-            attn_outputs[0],
-            attn_outputs[1:],
-        )  # outputs: output, bias
-        hidden_states = self.adapter(attn_output) + attn_output
-        return (hidden_states,) + outputs               
+        if isinstance(self.attn_block, RobinAttention):
+            attn_outputs = self.attn_block(x, *attn_args, **attn_kwargs)
+            attn_output, outputs = (
+                attn_outputs[0],
+                attn_outputs[1:],
+            )  # outputs: output, bias
+            hidden_states = self.adapter(attn_output) + attn_output
+            return (hidden_states,) + outputs               
+        elif isinstance(self.attn_block, RobinMLP):
+            attn_output = self.attn_block(x, *attn_args, **attn_kwargs)
+            hidden_states = self.adapter(attn_output) + attn_output
+            return hidden_states
+        else:
+            raise NotImplementedError
 
 
 @add_start_docstrings(
